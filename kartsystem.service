@@ -1,0 +1,26 @@
+# /etc/systemd/system/kartsystem.service
+# Enable:  sudo systemctl enable kartsystem
+# Start:   sudo systemctl start kartsystem
+# Logs:    sudo journalctl -u kartsystem -f
+
+[Unit]
+Description=Kartsystem Flask App
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/kartsystem
+EnvironmentFile=/var/www/kartsystem/.env
+ExecStart=/var/www/kartsystem/venv/bin/gunicorn \
+    --config gunicorn.conf.py \
+    "app:create_app()"
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
