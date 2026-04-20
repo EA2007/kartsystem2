@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,24 +7,66 @@ import json
 db = SQLAlchemy()
 
 
+import re
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
 
     id         = db.Column(db.Integer, primary_key=True)
     username   = db.Column(db.String(64), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
-    role       = db.Column(db.String(16), nullable=False, default='user')  # 'admin' | 'user'
+    role       = db.Column(db.String(16), nullable=False, default='user')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Relationships
-    area_changes = db.relationship('ActivityLog', backref='user_ref', lazy='dynamic',
-                                   foreign_keys='ActivityLog.user_id')
+    # 🛡️ security fields
+    failed_logins = db.Column(db.Integer, default=0)
+    locked_until  = db.Column(db.DateTime, nullable=True)
 
+    # Relationships
+    area_changes = db.relationship(
+        'ActivityLog',
+        backref='user_ref',
+        lazy='dynamic',
+        foreign_keys='ActivityLog.user_id'
+    )
+
+    # 🔐 password hashing
     def set_password(self, password):
+        error = self.validate_password(password)
+        if error:
+            raise ValueError(error)
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
+
+    # 🔐 password rules
+    @staticmethod
+    def validate_password(password):
+        if len(password) < 8:
+            return "Minst 8 tecken"
+        if not re.search(r"[A-Z]", password):
+            return "Minst en stor bokstav"
+        if not re.search(r"[a-z]", password):
+            return "Minst en liten bokstav"
+        if not re.search(r"[0-9]", password):
+            return "Minst en siffra"
+        return None
+
+    # 🚫 brute-force protection
+    def is_locked(self):
+        if self.locked_until and self.locked_until > datetime.now(timezone.utc):
+            return True
+        return False
+
+    def register_failed_login(self):
+        self.failed_logins += 1
+        if self.failed_logins >= 5:
+            self.locked_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+    def reset_failed_logins(self):
+        self.failed_logins = 0
+        self.locked_until = None
 
     def to_dict(self):
         return {
@@ -33,33 +75,6 @@ class User(UserMixin, db.Model):
             'role': self.role,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
-
-
-class Customer(db.Model):
-    __tablename__ = 'customers'
-
-    id         = db.Column(db.Integer, primary_key=True)
-    name       = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-
-    # Relationships
-    areas = db.relationship('Area', backref='customer', lazy='dynamic',
-                            cascade='all, delete-orphan')
-
-    def to_dict(self):
-        areas = self.areas.all()
-        done    = sum(1 for a in areas if a.status == 'done')
-        started = sum(1 for a in areas if a.status == 'started')
-        return {
-            'id': self.id,
-            'name': self.name,
-            'area_count': len(areas),
-            'done_count': done,
-            'started_count': started,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-        }
-
-
 class Area(db.Model):
     __tablename__ = 'areas'
 
@@ -110,29 +125,60 @@ class ActivityLog(db.Model):
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
         }
 
-
 class Presence(db.Model):
-    """Live presence — one row per online user, upserted on each GPS ping."""
+    """
+    Live presence table — one row per user.
+    Updated on each GPS ping (upsert pattern).
+    """
+
     __tablename__ = 'presence'
 
-    id          = db.Column(db.Integer, primary_key=True)
-    user_id     = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
-    lat         = db.Column(db.Float, nullable=True)
-    lng         = db.Column(db.Float, nullable=True)
-    accuracy    = db.Column(db.Float, nullable=True)
-    working_on  = db.Column(db.String(120), nullable=True)
-    updated_at  = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
-                            onupdate=lambda: datetime.now(timezone.utc))
+    id = db.Column(db.Integer, primary_key=True)
 
-    user        = db.relationship('User', foreign_keys=[user_id])
+    # One active presence row per user
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='CASCADE'),
+        unique=True,
+        nullable=False,
+        index=True
+    )
+
+    # Cached user info (faster than join for admin map)
+    username = db.Column(db.String(80), nullable=False)
+    role = db.Column(db.String(20), nullable=True)
+
+    # GPS data
+    lat = db.Column(db.Float, nullable=True)
+    lng = db.Column(db.Float, nullable=True)
+    accuracy = db.Column(db.Float, nullable=True)
+
+    # Optional context (what user is working on)
+    working_on = db.Column(db.String(120), nullable=True)
+
+    # Last update timestamp (server controlled)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationship
+    user = db.relationship(
+        'User',
+        backref=db.backref('presence', uselist=False, cascade="all, delete"),
+        foreign_keys=[user_id]
+    )
 
     def to_dict(self):
         return {
-            'username': self.user.username if self.user else None,
-            'role': self.user.role if self.user else None,
-            'lat': self.lat,
-            'lng': self.lng,
-            'accuracy': self.accuracy,
-            'working_on': self.working_on,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            "user_id": self.user_id,
+            "username": self.username,
+            "role": self.role,
+            "lat": self.lat,
+            "lng": self.lng,
+            "accuracy": self.accuracy,
+            "working_on": self.working_on,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+    
