@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <title>Kartsystem</title>
@@ -13,16 +13,57 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
 
 <style>
-/* ===== DIN CSS (oförändrad) ===== */
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-:root{--bg:#0a0d14;--s1:#111520;--s2:#181c28;--s3:#1f2435;--s4:#262c3e;--border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.12);--text:#e4e8f5;--text2:#b0b8d0;--muted:#4e5870;--accent:#4f7cff;--accent2:rgba(79,124,255,.18);--aglow:rgba(79,124,255,.45);--red:#ff4444;--red2:rgba(255,68,68,.14);--orange:#ffaa00;--orange2:rgba(255,170,0,.14);--green:#22d472;--green2:rgba(34,212,114,.14);--r:12px;--panel-w:310px;--safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px)}
-html,body{height:100%;font-family:'Inter',system-ui,sans-serif;background:var(--bg);overflow:hidden;color:var(--text)}
-#map{position:fixed;inset:0;z-index:0}
-/* (resten av din CSS är oförändrad — bortklippt här för längd) */
+*,*::before,*::after{
+  box-sizing:border-box;
+  margin:0;
+  padding:0;
+  -webkit-tap-highlight-color:transparent;
+}
+
+:root{
+  --bg:#0a0d14;
+  --text:#e4e8f5;
+}
+
+html,body{
+  height:100%;
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg);
+  overflow:hidden;
+  color:var(--text);
+}
+
+#map{
+  position:fixed;
+  inset:0;
+  z-index:1;
+}
+
+/* ===== TOAST ===== */
+#toast{
+  position:fixed;
+  bottom:30px;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(0,0,0,0.85);
+  color:#fff;
+  padding:12px 18px;
+  border-radius:10px;
+  font-size:14px;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity 0.3s ease;
+  z-index:9999;
+}
+
+#toast.show{
+  opacity:1;
+}
 </style>
 </head>
 
 <body>
+
 <div id="map"></div>
 <div id="toast"></div>
 
@@ -47,17 +88,27 @@ let searchMarker=null;
 let drawControl=null;
 let pollTimer=null;
 
-// FIX: en enda timer (tidigare bug)
 let placeTimer=null;
 
-// ================= HELPERS =================
+// ================= TOAST FIX =================
+let toastTimer = null;
+
 function toast(msg){
-  const e=document.getElementById('toast');
-  e.innerText=msg;
+  const e = document.getElementById('toast');
+
+  e.innerText = msg;
   e.classList.add('show');
-  setTimeout(()=>e.classList.remove('show'),2000);
+
+  // Rensa gammal timer (viktigt!)
+  if (toastTimer) clearTimeout(toastTimer);
+
+  // Försvinner efter 2 sek
+  toastTimer = setTimeout(() => {
+    e.classList.remove('show');
+  }, 2000);
 }
 
+// ================= HELPERS =================
 async function api(m,u,b){
   const r=await fetch(u,{
     method:m,
@@ -84,7 +135,6 @@ async function selectCustomer(c){
   renderCustomers?.();
   closePanel?.();
 
-  // FIX: inga undefined lat/lng/acc
   if(lastGPSPos){
     POST('/api/presence',{
       lat:lastGPSPos.lat,
@@ -107,8 +157,8 @@ async function selectCustomer(c){
 // ================= SEARCH FIX =================
 function onPlaceInput(){
   clearTimeout(placeTimer);
-  const q=document.getElementById('placeSearch').value.trim();
-  if(q.length<3)return;
+  const q=document.getElementById('placeSearch')?.value.trim();
+  if(!q || q.length<3)return;
 
   placeTimer=setTimeout(()=>doPlaceSearch(q),400);
 }
@@ -127,7 +177,7 @@ function onGPS(pos){
   });
 }
 
-// ================= STUBS (om dina saknas) =================
+// ================= STUBS =================
 function loadCustomerAreas(){}
 function updateBanner(){}
 function renderCustomers(){}
@@ -135,11 +185,21 @@ function closePanel(){}
 function deselectCustomer(){activeCustomer=null}
 
 // ================= INIT MAP =================
-const map=L.map('map').setView([59.33,18.06],13);
+const map=L.map('map',{
+  tap:true,
+  touchZoom:true,
+  dragging:true
+}).setView([59.33,18.06],13);
+
 L.tileLayer('https://{s}.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}',{
   subdomains:['mt0','mt1','mt2','mt3']
 }).addTo(map);
 
+// ================= TEST =================
+map.on('click',()=>{
+  toast("Du klickade på kartan");
+});
 </script>
+
 </body>
 </html>
